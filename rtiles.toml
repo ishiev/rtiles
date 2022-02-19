@@ -1,2 +1,6 @@
 [default]
-base_path = "/models/model/"
+base_path = "/3d-models/model/"
+
+[default.access]
+server = "https://myserver.net"
+ttl = 20
