@@ -23,6 +23,7 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Deserialize, Serialize)]
 struct Config<'a> {
     ident: String,
+    cli_colors: bool,
     base_path: Origin<'a>,
     storage: ConfigStorage,
     access: AccessConfig,
@@ -32,6 +33,7 @@ impl Default for Config<'_> {
     fn default() -> Self {
         Config {
             ident: format!("{}/{}", SERVER_NAME, SERVER_VERSION),
+            cli_colors: false,
             base_path: Origin::path_only("/3d-models/model"),
             storage: ConfigStorage::default(),
             access: AccessConfig::default(),
@@ -86,8 +88,8 @@ async fn tileset(
                 // if file path is directory -- assume tileset.json file
                 file.push("tileset.json");
             }
-            // serve to file
-            debug!("granted access to file: {:?}", &file);
+            // serving file
+            debug!("serving file: {:?}", &file);
             NamedFile::open(file).await.ok()
         },
         AccessMode::Denied => None,
@@ -120,7 +122,7 @@ fn rocket() -> _ {
         process::exit(1)
     });
 
-    println!("Staring 3D tiles server, {}/{}", SERVER_NAME, SERVER_VERSION);
+    println!("Starting 3D tiles rocket server, {}/{}", SERVER_NAME, SERVER_VERSION);
 
     rocket::custom(figment)
         .manage(model_access)

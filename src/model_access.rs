@@ -88,7 +88,7 @@ impl ModelAccess {
         let mode = self.cache
             .get_or_insert_with(key, async { self.check_remote(&key2).await })
             .await;
-        debug!("access mode: {:?}", mode);
+        debug!("access {:?} for {:?}", mode, &key2);
         mode
     }
 
