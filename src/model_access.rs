@@ -7,8 +7,6 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
 
-use log::{info, error};
-
 /// Model auth configuration
 /// TODO: write docs
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -65,8 +63,10 @@ impl ModelAccess {
         let cache = Cache::builder()
             // Max 100,000 entries
             .max_capacity(100_000)
-            // Max TTL fof items
-            .time_to_idle(Duration::from_secs(config.cache_ttl))
+            // Max TTL for items
+            .time_to_live(Duration::from_secs(config.cache_ttl))
+            // Max TTI for items - 1 min
+            .time_to_idle(Duration::from_secs(60))
             .build();
 
         let client = Client::builder()
@@ -81,18 +81,15 @@ impl ModelAccess {
         })
     }
 
-    // get back config reference
-    pub fn config(&self) -> &AccessConfig {
-        &self.config
-    }
-
     // check access to model
     pub async fn check(&self, key: AccessKey) -> AccessMode {
-        let key = Arc::new(key);
-        let key2 = key.clone();
-        self.cache
+        let key  = Arc::new(key);
+        let key2 = Arc::clone(&key);
+        let mode = self.cache
             .get_or_insert_with(key, async { self.check_remote(&key2).await })
-            .await
+            .await;
+        debug!("access mode: {:?}", mode);
+        mode
     }
 
     async fn check_remote(&self, key: &AccessKey) -> AccessMode {
@@ -103,28 +100,29 @@ impl ModelAccess {
             key.model
         );
         
-        info!("Send request to remote server: {}", &url);
-
         // prepare request to remote server
+        debug!("request to remote server: {}", &url);
         let mut rq = self.client.get(&url);
             
         // add session id cookie if exists
         if let Some(id) = &key.session_id {
-            rq = rq.header(
-                "Cookie",
-                format!(
-                    "{}={}", 
-                    self.config.cookie_name, 
-                    id
-                )
-            )
+            let cookie = format!(
+                "{}={}", 
+                self.config.cookie_name, 
+                id
+            );
+            debug!("set cookie: {}", &cookie);
+            rq = rq.header("Cookie", &cookie);
         } 
        
         // send request to remote server and interpret response
         match rq.send().await {
             Ok(res) if res.status() == StatusCode::OK => AccessMode::Granted,
             Ok(_)  => AccessMode::Denied,
-            Err(_) => AccessMode::Denied
+            Err(err) => {
+                error!("failed to get response from remote server: {}", &err);
+                AccessMode::Denied
+            }
         }
     }
 }

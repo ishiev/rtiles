@@ -1,6 +1,7 @@
 [default]
 base_path = "/3d-models/model/"
+log_level = "debug"
 
 [default.access]
-server = "https://myserver.net"
-ttl = 20
+server = "http://127.0.0.0:8888"
+cache_ttl = 20

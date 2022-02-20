@@ -9,18 +9,20 @@ use rocket::fs::NamedFile;
 use rocket::http::{uri::Origin, CookieJar};
 use rocket::serde::{Deserialize, Serialize};
 use rocket::State;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process;
 use std::sync::Arc;
-
-use log::{info, error};
 
 mod model_access;
 use model_access::{AccessConfig, AccessKey, AccessMode, ModelAccess};
 
+const SERVER_NAME: &str = env!("CARGO_PKG_NAME");
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Configuration params for rtiles
 #[derive(Debug, Deserialize, Serialize)]
 struct Config<'a> {
+    ident: String,
     base_path: Origin<'a>,
     storage: ConfigStorage,
     access: AccessConfig,
@@ -29,6 +31,7 @@ struct Config<'a> {
 impl Default for Config<'_> {
     fn default() -> Self {
         Config {
+            ident: format!("{}/{}", SERVER_NAME, SERVER_VERSION),
             base_path: Origin::path_only("/3d-models/model"),
             storage: ConfigStorage::default(),
             access: AccessConfig::default(),
@@ -40,14 +43,14 @@ impl Default for Config<'_> {
 #[derive(Debug, Deserialize, Serialize)]
 struct ConfigStorage {
     root: PathBuf,
-    cache_size: u32,
+    //cache_size: u32,
 }
 
 impl Default for ConfigStorage {
     fn default() -> Self {
         ConfigStorage {
             root: PathBuf::from("data"),
-            cache_size: 1024 * 1024 * 512, // 512MB
+            //cache_size: 1024 * 1024 * 512, // 512MB
         }
     }
 }
@@ -64,22 +67,36 @@ async fn tileset(
  
     // get session id cookie from request
     let session_id = cookies
-        .get(&model_access.config().cookie_name)
+        .get(&config.access.cookie_name)
         .map(|x| x.value());
     
     // check access mode for model
-    let acess_mode = model_access
+    let access_mode = model_access
         .check(AccessKey::new(object, model, session_id))
         .await;
         
-    match acess_mode {
+    match access_mode {
         AccessMode::Granted => {
-            NamedFile::open(Path::new(&config.storage.root).join(path))
-                       .await
-                       .ok()
+            // build path to served file
+            let mut file = PathBuf::from(&config.storage.root);
+            file.push(&object);
+            file.push(&model);
+            file.push(&path);
+            if file.is_dir() {
+                // if file path is directory -- assume tileset.json file
+                file.push("tileset.json");
+            }
+            // serve to file
+            debug!("granted access to file: {:?}", &file);
+            NamedFile::open(file).await.ok()
         },
         AccessMode::Denied => None,
     }
+}
+
+#[catch(404)]
+fn not_found() -> &'static str {
+    "NOT FOUND"
 }
 
 #[launch]
@@ -103,8 +120,11 @@ fn rocket() -> _ {
         process::exit(1)
     });
 
+    println!("Staring 3D tiles server, {}/{}", SERVER_NAME, SERVER_VERSION);
+
     rocket::custom(figment)
         .manage(model_access)
         .manage(Arc::clone(&config))
         .mount(config.base_path.to_owned(), routes![tileset])
+        .register("/", catchers![not_found])
 }
