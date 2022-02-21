@@ -1,9 +1,13 @@
 [default]
-address = "0.0.0.0"
+address = "127.0.0.1"
 port = 8000
-base_path = "/3d-models/model/"
+base_path = "/3d/models/"
 log_level = "debug"
 
 [default.access]
-server = "http://127.0.0.0:8888"
-cache_ttl = 20
+server = "http://127.0.0.1:8888/3d/models"
+cache_ttl = 1800
+
+[default.storage]
+root = "data"
+max_age = 1800

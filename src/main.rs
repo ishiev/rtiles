@@ -9,6 +9,7 @@ use rocket::fs::NamedFile;
 use rocket::http::{uri::Origin, CookieJar};
 use rocket::serde::{Deserialize, Serialize};
 use rocket::State;
+use rocket_cache_response::CacheResponse;
 use std::path::PathBuf;
 use std::process;
 use std::sync::Arc;
@@ -45,14 +46,14 @@ impl Default for Config<'_> {
 #[derive(Debug, Deserialize, Serialize)]
 struct ConfigStorage {
     root: PathBuf,
-    //cache_size: u32,
+    max_age: u32,
 }
 
 impl Default for ConfigStorage {
     fn default() -> Self {
         ConfigStorage {
             root: PathBuf::from("data"),
-            //cache_size: 1024 * 1024 * 512, // 512MB
+            max_age: 30*60, // 30 minutes
         }
     }
 }
@@ -65,7 +66,7 @@ async fn tileset(
     cookies: &CookieJar<'_>,
     model_access: &State<ModelAccess>,
     config: &State<Arc<Config<'_>>>,
-) -> Option<NamedFile> {
+) -> Option<CacheResponse<NamedFile>> {
  
     // get session id cookie from request
     let session_id = cookies
@@ -88,9 +89,15 @@ async fn tileset(
                 // if file path is directory -- assume tileset.json file
                 file.push("tileset.json");
             }
-            // serving file
+            // serving file with cache-control header set
             debug!("serving file: {:?}", &file);
-            NamedFile::open(file).await.ok()
+            NamedFile::open(file)
+                .await
+                .ok()
+                .map(|x| CacheResponse::Private {
+                    responder: x,
+                    max_age: config.storage.max_age
+                })          
         },
         AccessMode::Denied => None,
     }

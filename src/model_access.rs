@@ -20,7 +20,7 @@ impl Default for AccessConfig {
     fn default() -> Self {
         AccessConfig {
             server: uri!("http://127.0.0.1:8888"),
-            cache_ttl: 30 * 60, // 30 minutes
+            cache_ttl: 30*60, // 30 minutes
             cookie_name: Cow::from("PHPSESSID"),
         }
     }
