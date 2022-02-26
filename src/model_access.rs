@@ -9,7 +9,7 @@ use std::time::Duration;
 
 /// Model auth configuration
 /// TODO: write docs
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct AccessConfig {
     pub server: Absolute<'static>,
     pub cache_ttl: u64,     // cache entry Time To Live
@@ -29,7 +29,7 @@ impl Default for AccessConfig {
 }
 
 /// Model access mode
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AccessMode {
     Granted,
     Denied,
@@ -126,5 +126,45 @@ impl ModelAccess {
                 AccessMode::Denied
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn get_model_access() -> ModelAccess {
+        ModelAccess::new(&AccessConfig::default()).unwrap()
+    }
+
+    fn get_access_key() -> AccessKey {
+        AccessKey::new("tver", "panorama", Some("secret_key"))
+    }
+
+    #[test]
+    fn default_config() {
+        let cfg = AccessConfig::default();
+        assert_eq!(cfg, AccessConfig {
+            server: uri!("http://127.0.0.1:8888"),
+            cache_ttl: 30*60, 
+            cache_tti: 5*60,   
+            cookie_name: Cow::from("PHPSESSID"),
+        })
+    }
+
+    #[test]
+    fn create_key() {
+        assert_eq!(get_access_key(), AccessKey {
+            object: String::from("tver"),
+            model: String::from("panorama"),
+            session_id: Some(String::from("secret_key"))
+        })
+    }
+
+    #[rocket::async_test]
+    async fn access_check() {
+        let key = get_access_key();
+        let model_access = get_model_access();
+        assert_eq!(model_access.check(key).await, AccessMode::Denied)
     }
 }
