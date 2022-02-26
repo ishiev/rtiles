@@ -12,7 +12,8 @@ use std::time::Duration;
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AccessConfig {
     pub server: Absolute<'static>,
-    pub cache_ttl: u64,
+    pub cache_ttl: u64,     // cache entry Time To Live
+    pub cache_tti: u64,     // cache entry Time To Idle (from last request)
     pub cookie_name: Cow<'static, str>,
 }
 
@@ -20,7 +21,8 @@ impl Default for AccessConfig {
     fn default() -> Self {
         AccessConfig {
             server: uri!("http://127.0.0.1:8888"),
-            cache_ttl: 30*60, // 30 minutes
+            cache_ttl: 30*60,   // 30 minutes
+            cache_tti: 5*60,    // 5 minutes    
             cookie_name: Cow::from("PHPSESSID"),
         }
     }
@@ -65,8 +67,8 @@ impl ModelAccess {
             .max_capacity(100_000)
             // Max TTL for items
             .time_to_live(Duration::from_secs(config.cache_ttl))
-            // Max TTI for items - 1 min
-            .time_to_idle(Duration::from_secs(60))
+            // Max TTI for items - 5 min
+            .time_to_idle(Duration::from_secs(config.cache_tti))
             .build();
 
         let client = Client::builder()
