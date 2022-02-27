@@ -133,8 +133,10 @@ impl ModelAccess {
 mod test {
     use super::*;
 
-    fn get_model_access() -> ModelAccess {
-        ModelAccess::new(&AccessConfig::default()).unwrap()
+    fn get_model_access(server: &'static str) -> ModelAccess {
+        let mut config = AccessConfig::default();
+        config.server = Absolute::parse(server).unwrap();
+        ModelAccess::new(&config).unwrap()
     }
 
     fn get_access_key() -> AccessKey {
@@ -162,9 +164,27 @@ mod test {
     }
 
     #[rocket::async_test]
-    async fn access_check() {
+    async fn access_check_timeout() {
         let key = get_access_key();
-        let model_access = get_model_access();
+        // set auth server to non routable address from TEST-NET-1
+        // this cause to timeout 5c
+        let model_access = get_model_access("http://192.0.2.0");  
+        assert_eq!(model_access.check(key).await, AccessMode::Denied)
+    }
+
+    #[rocket::async_test]
+    async fn access_check_granted() {
+        let key = get_access_key();
+        // set auth server to test server, always returns 200 OK
+        let model_access = get_model_access("https://httpbin.org/anything");
+        assert_eq!(model_access.check(key).await, AccessMode::Granted)
+    }
+
+    #[rocket::async_test]
+    async fn access_check_denied() {
+        let key = get_access_key();
+        // set auth server to test server, returns 404 NOT FOUND
+        let model_access = get_model_access("https://httpbin.org/status/404");
         assert_eq!(model_access.check(key).await, AccessMode::Denied)
     }
 }
