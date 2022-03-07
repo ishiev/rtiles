@@ -8,6 +8,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+tokio = { version = "1", features = ["full"] }
 rocket = "0.5.0-rc.1"
 rocket-cache-response = "0.6"
 serde = { version = "1.0", features = ["derive"] }

@@ -17,6 +17,8 @@ use std::sync::Arc;
 mod model_access;
 use model_access::{AccessConfig, AccessKey, AccessMode, ModelAccess};
 
+mod stat;
+
 const SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
