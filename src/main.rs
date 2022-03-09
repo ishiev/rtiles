@@ -7,7 +7,7 @@ use rocket::figment::{
 };
 use rocket::fs::NamedFile;
 use rocket::http::{uri::Origin, CookieJar};
-use rocket::serde::{Deserialize, Serialize};
+use rocket::serde::{Deserialize, Serialize, json::Json};
 use rocket::State;
 use rocket_cache_response::CacheResponse;
 use std::path::PathBuf;
@@ -18,6 +18,7 @@ mod model_access;
 use model_access::{AccessConfig, AccessKey, AccessMode, ModelAccess};
 
 mod stat;
+use stat::{Metrics, StatKey, Stat};
 
 const SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -68,6 +69,7 @@ async fn tileset(
     cookies: &CookieJar<'_>,
     model_access: &State<ModelAccess>,
     config: &State<Arc<Config<'_>>>,
+    stat: &State<Stat>
 ) -> Option<CacheResponse<NamedFile>> {
  
     // get session id cookie from request
@@ -93,17 +95,44 @@ async fn tileset(
             }
             // serving file with cache-control header set
             debug!("serving file: {:?}", &file);
-            NamedFile::open(file)
-                .await
-                .ok()
-                .map(|x| CacheResponse::Private {
-                    responder: x,
-                    max_age: config.storage.max_age
-                })          
+            match NamedFile::open(&file).await {
+                Ok(res) => {
+                    // prepare and insert stat
+                    let bytes = match res.file().metadata().await {
+                        Ok(meta) => meta.len(),
+                        Err(_) => 0
+                    };
+                    let key = StatKey::new(Some(object), Some(model));
+                    let metrics = Metrics { hits: 1, bytes };
+                    stat.insert(key, metrics)
+                        .await
+                        .unwrap_or_else(|err| error!("error insert stat: {err}"));
+                    // add cache header to response
+                    Some(CacheResponse::Private {
+                        responder: res,
+                        max_age: config.storage.max_age
+                    })
+                },
+                Err(err) => {
+                    warn!("error opening file {:?}: {}", &file, err);
+                    None
+                }
+            }
         },
         AccessMode::Denied => None,
     }
 }
+
+
+#[get("/stat?<object>&<model>")]
+async fn stat_model(
+    object: Option<&str>,
+    model: Option<&str>,
+    stat: &State<Stat>
+) -> Json<Metrics> {
+    Json(stat.get(&StatKey::new(object, model)).await)
+}
+
 
 #[catch(404)]
 fn not_found() -> &'static str {
@@ -136,6 +165,7 @@ fn rocket() -> _ {
     rocket::custom(figment)
         .manage(model_access)
         .manage(Arc::clone(&config))
-        .mount(config.base_path.to_owned(), routes![tileset])
+        .manage(Stat::new())
+        .mount(config.base_path.to_owned(), routes![tileset, stat_model])
         .register("/", catchers![not_found])
 }

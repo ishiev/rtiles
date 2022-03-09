@@ -1,33 +1,34 @@
 use std::collections::HashMap;
 use std::ops::AddAssign;
 use std::sync::Arc;
-use tokio::task::{self, JoinHandle};
+use tokio::task;
 use tokio::sync::{mpsc, RwLock};
+use serde::Serialize;
 
 /// Statistic key
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct StatKey {
-    object: Option<String>,   // None means aggregates for all models of all objects
-    model: Option<String>,    // None means aggregates for all models of a given object
+pub struct StatKey {
+    pub object: Option<String>,   // None means aggregates for all models of all objects
+    pub model: Option<String>,    // None means aggregates for all models of a given object
 }
 
 impl Default for StatKey {
     fn default() -> Self {
-        StatKey {object: None, model: None}
+        StatKey { object: None, model: None }
     }   
 }
 
 impl StatKey {
-    fn new(object: &str, model: &str) -> Self {
-        StatKey {object: Some(object.to_owned()), model: Some(model.to_owned())}
+    pub fn new(object: Option<&str>, model: Option<&str>) -> Self {
+        StatKey { object: object.map(str::to_owned), model: model.map(str::to_owned) }
     }
 }
 
 /// Statistic metrics
-#[derive(Debug, Copy, Clone, PartialEq)]
-struct Metrics {
-    hits: u64,                // request count
-    bytes: u64                // request bytes     
+#[derive(Debug, Copy, Clone, PartialEq, Serialize)]
+pub struct Metrics {
+    pub hits: u64,                // request count
+    pub bytes: u64                // request bytes     
 }
 
 impl Default for Metrics {
@@ -46,10 +47,9 @@ impl AddAssign for Metrics {
     }
 }
 
-
 /// Statistic record
 #[derive(Debug)]
-struct Record {
+pub struct Record {
     key: StatKey,
     metrics: Metrics
 }
@@ -116,13 +116,13 @@ impl StatTable {
 
 /// Server statistics
 #[derive(Clone)]
-struct Stat {
+pub struct Stat {
     all: Arc<StatTable>,
     tx: mpsc::Sender<Record>,
 }
 
 impl Stat {
-    fn new() -> Self {
+    pub fn new() -> Self {
         let all = Arc::new(StatTable::new());
         let all_rx = Arc::clone(&all);
         let (tx, mut rx) = mpsc::channel(500);
@@ -130,7 +130,6 @@ impl Stat {
         // spawn a detached async task
         // task ended when the channel has been closed 
         task::spawn(async move {
-            debug!("stat recv task started");
             while let Some(rec) = rx.recv().await {
                 // insert record to stat table
                 all_rx.insert(rec).await;
@@ -141,12 +140,12 @@ impl Stat {
         Stat { all, tx }
     }
 
-    async fn insert(&self, rec: Record) 
+    pub async fn insert(&self, key: StatKey, metrics: Metrics) 
         -> Result<(), mpsc::error::SendError<Record>> {
-        self.tx.send(rec).await
+        self.tx.send(Record{ key, metrics }).await
     }
 
-    async fn get(&self, key: &StatKey) -> Metrics {
+    pub async fn get(&self, key: &StatKey) -> Metrics {
         // move current task to end of the task queue 
         // to complete async inserts before get back values
         task::yield_now().await;
@@ -225,7 +224,7 @@ mod test {
         let stat = Stat::new();
 
         for _ in 0..10 {
-            stat.insert(Record { key: key.clone(), metrics }).await.unwrap();
+            stat.insert(key.clone(), metrics).await.unwrap();
         }
         let mut res = stat.get(&key).await;
         assert_eq!(res, Metrics { hits: 10, bytes: 10000 });

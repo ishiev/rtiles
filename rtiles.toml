@@ -5,7 +5,7 @@ base_path = "/3d/models/"
 log_level = "debug"
 
 [default.access]
-server = "http://127.0.0.1:8888/3d/models"
+server = "https://httpbin.org/anything"
 cache_ttl = 1800
 cache_tti = 300
 

@@ -9,7 +9,7 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-rocket = "0.5.0-rc.1"
+rocket = { version = "0.5.0-rc.1", features = ["json"] }
 rocket-cache-response = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 moka = { version = "0.7", features = ["future"] }
