@@ -2,10 +2,13 @@ use moka::future::Cache;
 use reqwest::{Client, Error, StatusCode};
 use rocket::http::uri::Absolute;
 use rocket::serde::{Deserialize, Serialize};
+use rocket::request::{Request, FromRequest, Outcome};
 use std::borrow::Cow;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
+
+use crate::Config;
 
 /// Model auth configuration
 /// TODO: write docs
@@ -28,6 +31,36 @@ impl Default for AccessConfig {
     }
 }
 
+/// User session identifier
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+pub struct SessionId<'r>(Option<Cow<'r, str>>);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for SessionId<'r> {
+    type Error = ();
+
+    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        // get typed config from rocket managed state
+        let config = req.rocket()
+            .state::<Arc<Config<'_>>>()
+            .unwrap();
+        
+        // get session id cookie from request
+        let id_option = req.cookies()
+            .get(&config.access.cookie_name)
+            .map(|x| Cow::from(x.value()));
+
+        Outcome::Success(SessionId(id_option))
+        }
+}
+
+/// Make SessionId from &str
+impl<'a> From<&'a str> for SessionId<'a> {
+    fn from(id_str: &'a str) -> Self {
+        SessionId(Some(Cow::from(id_str)))
+    }
+}
+
 /// Model access mode
 #[derive(Debug, Clone, PartialEq)]
 pub enum AccessMode {
@@ -38,17 +71,20 @@ pub enum AccessMode {
 /// Model Access key
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct AccessKey {
-    object: String,
-    model: String,
-    session_id: Option<String>,
+    object: Option<String>,
+    model: Option<String>,
+    session_id: SessionId<'static>,
 }
 
 impl AccessKey {
-    pub fn new(object: &str, model: &str, session_id: Option<&str>) -> Self {
+    pub fn new(object: Option<&str>, model: Option<&str>, session_id: SessionId) -> Self {
+        // make new owned type Option<Cow<'static, str>>
+        let id_option = session_id.0
+            .map(|x| Cow::from(x.as_ref().to_owned()));
         AccessKey{
-            object: object.to_owned(),
-            model: model.to_owned(),
-            session_id: session_id.map(str::to_owned)
+            object: object.map(|x| x.to_owned()),
+            model: model.map(|x| x.to_owned()),
+            session_id: SessionId(id_option)
         }
     }
 }
@@ -98,8 +134,8 @@ impl ModelAccess {
         // url for request
         let url = format!("{}/{}/{}",
             self.config.server, 
-            key.object, 
-            key.model
+            match key.object { Some(ref x) => x.as_ref(), None => "" }, 
+            match key.model  { Some(ref x) => x.as_ref(), None => "" }
         );
         
         // prepare request to remote server
@@ -107,7 +143,7 @@ impl ModelAccess {
         let mut rq = self.client.get(&url);
             
         // add session id cookie if exists
-        if let Some(id) = &key.session_id {
+        if let Some(id) = &key.session_id.0 {
             let cookie = format!(
                 "{}={}", 
                 self.config.cookie_name, 
@@ -140,7 +176,7 @@ mod test {
     }
 
     fn get_access_key() -> AccessKey {
-        AccessKey::new("tver", "panorama", Some("secret_key"))
+        AccessKey::new(Some("tver"), Some("panorama"), SessionId::from("secret_key"))
     }
 
     #[test]
@@ -157,9 +193,9 @@ mod test {
     #[test]
     fn create_key() {
         assert_eq!(get_access_key(), AccessKey {
-            object: String::from("tver"),
-            model: String::from("panorama"),
-            session_id: Some(String::from("secret_key"))
+            object: Some(String::from("tver")),
+            model:  Some(String::from("panorama")),
+            session_id: SessionId::from("secret_key")
         })
     }
 

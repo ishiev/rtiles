@@ -6,80 +6,36 @@ use rocket::figment::{
     Figment, Profile,
 };
 use rocket::fs::NamedFile;
-use rocket::http::{uri::Origin, CookieJar};
-use rocket::serde::{Deserialize, Serialize, json::Json};
+use rocket::http::Status;
+use rocket::serde::json::Json;
 use rocket::State;
 use rocket_cache_response::CacheResponse;
 use std::path::PathBuf;
 use std::process;
 use std::sync::Arc;
 
+mod config;
+use config::{Config, SERVER_NAME, SERVER_VERSION};
+
 mod model_access;
-use model_access::{AccessConfig, AccessKey, AccessMode, ModelAccess};
+use model_access::{AccessConfig, AccessKey, AccessMode, ModelAccess, SessionId};
 
 mod stat;
 use stat::{Metrics, StatKey, Stat};
 
-const SERVER_NAME: &str = env!("CARGO_PKG_NAME");
-const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Configuration params for rtiles
-#[derive(Debug, Deserialize, Serialize)]
-struct Config<'a> {
-    ident: String,
-    cli_colors: bool,
-    base_path: Origin<'a>,
-    storage: ConfigStorage,
-    access: AccessConfig,
-}
-
-impl Default for Config<'_> {
-    fn default() -> Self {
-        Config {
-            ident: format!("{}/{}", SERVER_NAME, SERVER_VERSION),
-            cli_colors: false,
-            base_path: Origin::path_only("/3d-models/model"),
-            storage: ConfigStorage::default(),
-            access: AccessConfig::default(),
-        }
-    }
-}
-
-/// Storage and cache params
-#[derive(Debug, Deserialize, Serialize)]
-struct ConfigStorage {
-    root: PathBuf,
-    max_age: u32,
-}
-
-impl Default for ConfigStorage {
-    fn default() -> Self {
-        ConfigStorage {
-            root: PathBuf::from("data"),
-            max_age: 30*60, // 30 minutes
-        }
-    }
-}
-
-#[get("/<object>/<model>/<path..>")]
+#[get("/models/<object>/<model>/<path..>")]
 async fn tileset(
     object: &str,
     model: &str,
     path: PathBuf,
-    cookies: &CookieJar<'_>,
+    session_id: SessionId<'_>,
     model_access: &State<ModelAccess>,
     config: &State<Arc<Config<'_>>>,
     stat: &State<Stat>
-) -> Option<CacheResponse<NamedFile>> {
- 
-    // get session id cookie from request
-    let session_id = cookies
-        .get(&config.access.cookie_name)
-        .map(|x| x.value());
-    
+) -> Result<CacheResponse<NamedFile>, Status> {
     // check access mode for model
     let access_mode = model_access
-        .check(AccessKey::new(object, model, session_id))
+        .check(AccessKey::new(Some(object), Some(model), session_id))
         .await;
         
     match access_mode {
@@ -108,36 +64,76 @@ async fn tileset(
                         .await
                         .unwrap_or_else(|err| error!("error insert stat: {err}"));
                     // add cache header to response
-                    Some(CacheResponse::Private {
+                    Ok(CacheResponse::Private {
                         responder: res,
                         max_age: config.storage.max_age
                     })
                 },
                 Err(err) => {
                     warn!("error opening file {:?}: {}", &file, err);
-                    None
+                    Err(Status::NotFound)
                 }
             }
         },
-        AccessMode::Denied => None,
+        AccessMode::Denied => Err(Status::Forbidden),
     }
 }
 
 
-#[get("/stat?<object>&<model>")]
+#[get("/stat")]
+async fn stat_all(
+    session_id: SessionId<'_>,
+    model_access: &State<ModelAccess>,
+    stat: &State<Stat>
+) -> Result<Json<Metrics>, Status> {
+    // check access mode for object
+    let access_mode = model_access
+        .check(AccessKey::new(None, None, session_id))
+        .await;
+
+    match access_mode {
+        AccessMode::Granted => Ok(Json(stat.get(&StatKey::new(None, None)).await)),
+        AccessMode::Denied  => Err(Status::Forbidden)
+    }
+}
+
+#[get("/stat/<object>")]
+async fn stat_object(
+    object: Option<&str>,
+    session_id: SessionId<'_>,
+    model_access: &State<ModelAccess>,
+    stat: &State<Stat>
+) -> Result<Json<Metrics>, Status> {
+    // check access mode for object
+    let access_mode = model_access
+        .check(AccessKey::new(object, None, session_id))
+        .await;
+
+    match access_mode {
+        AccessMode::Granted => Ok(Json(stat.get(&StatKey::new(object, None)).await)),
+        AccessMode::Denied  => Err(Status::Forbidden)
+    }
+}
+
+#[get("/stat/<object>/<model>")]
 async fn stat_model(
     object: Option<&str>,
     model: Option<&str>,
+    session_id: SessionId<'_>,
+    model_access: &State<ModelAccess>,
     stat: &State<Stat>
-) -> Json<Metrics> {
-    Json(stat.get(&StatKey::new(object, model)).await)
+) -> Result<Json<Metrics>, Status> {
+    // check access mode for model
+    let access_mode = model_access
+        .check(AccessKey::new(object, model, session_id))
+        .await;
+
+    match access_mode {
+        AccessMode::Granted => Ok(Json(stat.get(&StatKey::new(object, model)).await)),
+        AccessMode::Denied  => Err(Status::Forbidden)
+    }
 }
 
-
-#[catch(404)]
-fn not_found() -> &'static str {
-    "NOT FOUND"
-}
 
 #[launch]
 fn rocket() -> _ {
@@ -166,6 +162,8 @@ fn rocket() -> _ {
         .manage(model_access)
         .manage(Arc::clone(&config))
         .manage(Stat::new())
-        .mount(config.base_path.to_owned(), routes![tileset, stat_model])
-        .register("/", catchers![not_found])
+        .mount(
+            config.base_path.to_owned(), 
+            routes![tileset, stat_all, stat_object, stat_model]
+        )
 }
