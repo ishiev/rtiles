@@ -138,7 +138,7 @@ mod test {
 
     #[tokio::test]
     async fn load_file() {
-        let path = "data/tree/mod-1/tree_billboard.i3dm";
+        let path = "README.md";
 
         let cnt = Content::from_file(path).await.unwrap();
         println!(
@@ -160,7 +160,7 @@ mod test {
 
     #[tokio::test]
     async fn file_cache() {
-        let path = PathBuf::from("data/tree/mod-1/tree_billboard.i3dm");
+        let path = PathBuf::from("README.md");
 
         let cache = FileCache::new(&FileCacheConfig::default());
         cache.insert(path.clone()).unwrap();
