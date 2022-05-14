@@ -20,6 +20,8 @@ use config::{Config, SERVER_NAME, SERVER_VERSION};
 mod model_access;
 use model_access::{AccessConfig, AccessKey, AccessMode, ModelAccess, SessionId};
 
+mod model_cache;
+
 mod stat;
 use stat::{Metrics, StatKey, Stat};
 
