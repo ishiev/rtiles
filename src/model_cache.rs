@@ -37,15 +37,16 @@ impl Default for FileCacheConfig {
 
 pub enum CachedNamedFile {
     File(NamedFile),
-    Cache(Content)
+    Cached(Content)
 }
 
 impl CachedNamedFile {
     /// Get back cached content or open named file
     pub async fn open_with_cache(path: PathBuf, cache: &FileCache) 
     -> io::Result<CachedNamedFile> {
+        // try to get content from cache
         if let Some(cnt) = cache.get(&path) {
-            Ok(CachedNamedFile::Cache(cnt))
+            Ok(CachedNamedFile::Cached(cnt))
         } else {
             let f = NamedFile::open(&path).await;
             if let Ok(_) = f {
@@ -66,14 +67,14 @@ impl CachedNamedFile {
                     Ok(m) => m.len() as usize,
                     Err(_) => 0
                 }
-            CachedNamedFile::Cache(c) => c.length
+            CachedNamedFile::Cached(c) => c.length
         }
     }
 
     pub fn is_cached(&self) -> bool {
         match self {
             CachedNamedFile::File(_) => false,
-            CachedNamedFile::Cache(_) => true
+            CachedNamedFile::Cached(_) => true
         }
     }
 }
@@ -83,7 +84,7 @@ impl<'r> Responder<'r, 'static> for CachedNamedFile {
     fn respond_to(self, req: &'r Request<'_>) -> response::Result<'static> {
         match self {
             CachedNamedFile::File(f) => f.respond_to(req),
-            CachedNamedFile::Cache(c) => c.respond_to(req),
+            CachedNamedFile::Cached(c) => c.respond_to(req),
         }
     }
 }
