@@ -64,8 +64,6 @@ impl Content {
     }
 }
 
-/// Thread-safe cached file
-//pub struct ModelFile(RwLock<Content>);
 
 /// File cache
 pub struct FileCache {
@@ -103,11 +101,11 @@ impl FileCache {
                     },
                     Err(err) => {
                         // no inserts if problem with file loading
-                        error!("error loading file to cache: {}", err)
+                        error!("cache file loading error: {}", err)
                     }
                 }
             }
-            debug!("file cache update task finished");
+            debug!("cache file upload task completed");
         });
 
         FileCache { cache, tx }
@@ -142,7 +140,7 @@ mod test {
 
         let cnt = Content::from_file(path).await.unwrap();
         println!(
-            "read {} bytes, type: {:?}",
+            "{} bytes read, type: {:?}",
             cnt.length,
             cnt.mime_type,
         );
