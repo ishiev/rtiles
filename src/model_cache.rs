@@ -208,7 +208,7 @@ mod test {
     use tokio::time::sleep;
 
     #[tokio::test]
-    async fn load_file() {
+    async fn content_from_file() {
         let path = "README.md";
 
         let cnt = Content::from_file(path).await.unwrap();
@@ -226,7 +226,7 @@ mod test {
         let mut dst2 = Vec::new();
         f.read_to_end(&mut dst2).unwrap();
 
-        assert_eq!(&dst1, &dst2);
+        assert_eq!(dst1, dst2);
     }
 
     #[tokio::test]
@@ -248,6 +248,35 @@ mod test {
         let mut dst2 = Vec::new();
         f.read_to_end(&mut dst2).unwrap();
 
-        assert_eq!(&dst1, &dst2);
+        assert_eq!(dst1, dst2);
+    }
+
+    #[tokio::test]
+    async fn cached_named_file() {
+        let path = PathBuf::from("README.md");
+        let cache = FileCache::new(&FileCacheConfig::default());
+        let mut buf = (Vec::new(), Vec::new());
+        
+        match CachedNamedFile::open_with_cache(path.clone(), &cache).await.unwrap() {
+            CachedNamedFile::File(mut f) => f
+                .read_to_end(&mut buf.0)
+                .await
+                .unwrap(),
+            CachedNamedFile::Cached(_) => panic!()
+        };
+
+        // delay before get from cache
+        sleep(Duration::from_millis(100)).await;
+
+        match CachedNamedFile::open_with_cache(path.clone(), &cache).await.unwrap() {
+            CachedNamedFile::File(_) => panic!(),
+            CachedNamedFile::Cached(c) => c.body
+                .reader()
+                .read_to_end(&mut buf.1)
+                .unwrap()
+        };
+
+        assert_ne!(buf.0.len(), 0);
+        assert_eq!(buf.0, buf.1);
     }
 }
