@@ -5,14 +5,12 @@ use rocket::figment::{
     providers::{Env, Format, Serialized, Toml},
     Figment, Profile,
 };
-use rocket::fs::NamedFile;
 use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::State;
 use rocket_cache_response::CacheResponse;
 use std::path::PathBuf;
 use std::process;
-use std::sync::Arc;
 
 mod config;
 use config::{Config, SERVER_NAME, SERVER_VERSION};
@@ -21,9 +19,11 @@ mod model_access;
 use model_access::{AccessConfig, AccessKey, AccessMode, ModelAccess, SessionId};
 
 mod model_cache;
+use model_cache::{FileCacheConfig, FileCache, CachedNamedFile};
 
 mod stat;
 use stat::{Metrics, StatKey, Stat};
+
 
 #[get("/models/<object>/<model>/<path..>")]
 async fn tileset(
@@ -31,12 +31,13 @@ async fn tileset(
     model: &str,
     path: PathBuf,
     session_id: SessionId<'_>,
-    model_access: &State<ModelAccess>,
-    config: &State<Arc<Config<'_>>>,
+    config: &State<Config<'_>>,
+    access: &State<ModelAccess>,
+    cache: &State<FileCache>,
     stat: &State<Stat>
-) -> Result<CacheResponse<NamedFile>, Status> {
+) -> Result<CacheResponse<CachedNamedFile>, Status> {
     // check access mode for model
-    let access_mode = model_access
+    let access_mode = access
         .check(AccessKey::new(Some(object), Some(model), session_id))
         .await;
         
@@ -53,15 +54,13 @@ async fn tileset(
             }
             // serving file with cache-control header set
             debug!("serving file: {:?}", &file);
-            match NamedFile::open(&file).await {
+            match CachedNamedFile::open_with_cache(&file, cache).await {
                 Ok(res) => {
                     // prepare and insert stat
-                    let bytes = match res.file().metadata().await {
-                        Ok(meta) => meta.len(),
-                        Err(_) => 0
-                    };
+                    let bytes = res.len().await.unwrap_or(0);
+                    let cached = res.is_cached() as u64;
                     let key = StatKey::new(Some(object), Some(model));
-                    let metrics = Metrics { hits: 1, bytes };
+                    let metrics = Metrics { hits: 1, cached, bytes };
                     stat.insert(key, metrics)
                         .await
                         .unwrap_or_else(|err| error!("error insert stat: {err}"));
@@ -147,25 +146,35 @@ fn rocket() -> _ {
         .select(Profile::from_env_or("RTILES_PROFILE", "default"));
 
     // extract the config, exit if error
-    let config = Arc::<Config>::new(figment.extract().unwrap_or_else(|err| {
+    let config: Config = figment.extract().unwrap_or_else(|err| {
         eprintln!("Problem parsing config: {err}");
         process::exit(1)
-    }));
+    });
 
-    // create model access cached resolver
-    let model_access = ModelAccess::new(&config.access).unwrap_or_else(|err| {
+    // create model access cached resolver, exit if error
+    let access = ModelAccess::new(&config.access).unwrap_or_else(|err| {
         eprintln!("Problem create model access client: {err}");
         process::exit(1)
     });
 
+    // create file cache
+    let cache = FileCache::new(&config.cache);
+
+    // create stat server
+    let stat = Stat::new();
+
+    // set server base path from config
+    let base_path = config.base_path.to_owned();
+
     println!("Starting 3D tiles rocket server, {}/{}", SERVER_NAME, SERVER_VERSION);
 
     rocket::custom(figment)
-        .manage(model_access)
-        .manage(Arc::clone(&config))
-        .manage(Stat::new())
+        .manage(config)
+        .manage(access)
+        .manage(cache)
+        .manage(stat)
         .mount(
-            config.base_path.to_owned(), 
+            base_path, 
             routes![tileset, stat_all, stat_object, stat_model]
         )
 }

@@ -3,6 +3,7 @@ use rocket::serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::AccessConfig;
+use crate::FileCacheConfig;
 
 pub const SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -15,6 +16,7 @@ pub struct Config<'a> {
     pub base_path: Origin<'a>,
     pub storage: ConfigStorage,
     pub access: AccessConfig,
+    pub cache: FileCacheConfig,
 }
 
 impl Default for Config<'_> {
@@ -25,11 +27,12 @@ impl Default for Config<'_> {
             base_path: Origin::path_only("/3d"),
             storage: ConfigStorage::default(),
             access: AccessConfig::default(),
+            cache: FileCacheConfig::default()
         }
     }
 }
 
-/// Storage and cache params
+/// Storage and client cache params
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ConfigStorage {
     pub root: PathBuf,

@@ -12,3 +12,8 @@ cache_tti = 300
 [default.storage]
 root = "data"
 max_age = 1800
+
+[default.cache]
+size = 50           # 50 MB
+cache_ttl = 86400   # 24 hours
+cache_tti = 14400   # 4 hours

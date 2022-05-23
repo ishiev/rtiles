@@ -28,12 +28,13 @@ impl StatKey {
 #[derive(Debug, Copy, Clone, PartialEq, Serialize)]
 pub struct Metrics {
     pub hits: u64,                // request count
+    pub cached: u64,              // cached request count
     pub bytes: u64                // request bytes     
 }
 
 impl Default for Metrics {
     fn default() -> Self {
-        Metrics {hits: 0, bytes: 0}
+        Metrics {hits: 0, cached: 0, bytes: 0}
     }
 }
 
@@ -42,6 +43,7 @@ impl AddAssign for Metrics {
     fn add_assign(&mut self, other: Self) {
         *self = Self {
             hits: self.hits + other.hits,
+            cached: self.cached + other.cached,
             bytes: self.bytes + other.bytes,
         };
     }
@@ -161,7 +163,7 @@ mod test {
     #[tokio::test]
     async fn stat_table() {
         let mut key = StatKey::default();
-        let metrics = Metrics { hits: 1, bytes: 1000 };
+        let metrics = Metrics { hits: 1, cached: 1,  bytes: 1000 };
         let stat = StatTable::new();
 
         // test first model metrics 
@@ -170,18 +172,18 @@ mod test {
         stat.insert(Record { key: key.clone(), metrics }).await;
         stat.insert(Record { key: key.clone(), metrics }).await;
         let mut res = stat.get(&key).await;
-        assert_eq!(res, Metrics { hits: 2, bytes: 2000 });
+        assert_eq!(res, Metrics { hits: 2, cached: 2, bytes: 2000 });
 
         // test second model metrics
         key.model = Some("second".to_owned());
         stat.insert(Record { key: key.clone(), metrics }).await;
         res = stat.get(&key).await;
-        assert_eq!(res, Metrics { hits: 1, bytes: 1000 });
+        assert_eq!(res, Metrics { hits: 1, cached: 1, bytes: 1000 });
 
         // test metrics for whole object
         key.model = None;
         res = stat.get(&key).await;
-        assert_eq!(res, Metrics { hits: 3, bytes: 3000 });
+        assert_eq!(res, Metrics { hits: 3, cached: 3, bytes: 3000 });
 
         // test another object metrics 
         key.object = Some("land".to_owned());
@@ -189,29 +191,29 @@ mod test {
         stat.insert(Record { key: key.clone(), metrics }).await;
         stat.insert(Record { key: key.clone(), metrics }).await;
         res = stat.get(&key).await;
-        assert_eq!(res, Metrics { hits: 2, bytes: 2000 });
+        assert_eq!(res, Metrics { hits: 2, cached: 2, bytes: 2000 });
 
         // test metrics for another whole object
         key.model = None;
         res = stat.get(&key).await;
-        assert_eq!(res, Metrics { hits: 2, bytes: 2000 });
+        assert_eq!(res, Metrics { hits: 2, cached: 2, bytes: 2000 });
 
         // test metrics for server
         key.object = None;
         res = stat.get(&key).await;
-        assert_eq!(res, Metrics { hits: 5, bytes: 5000 });
+        assert_eq!(res, Metrics { hits: 5, cached: 5, bytes: 5000 });
 
         // test illegal object and model key metrics 
         key.model  = Some("first".to_owned());
         stat.insert(Record { key: key.clone(), metrics }).await;
         stat.insert(Record { key: key.clone(), metrics }).await;
         res = stat.get(&key).await;
-        assert_eq!(res, Metrics { hits: 0, bytes: 0 });
+        assert_eq!(res, Metrics { hits: 0, cached: 0, bytes: 0 });
 
         // again test metrics for server 
         key.model = None;
         res = stat.get(&key).await;
-        assert_eq!(res, Metrics { hits: 5, bytes: 5000 });
+        assert_eq!(res, Metrics { hits: 5, cached: 5, bytes: 5000 });
     }
 
     #[tokio::test]
@@ -220,19 +222,19 @@ mod test {
             object: Some("city".to_owned()),
             model: Some("block".to_owned())
         };
-        let metrics = Metrics { hits: 1, bytes: 1000 };
+        let metrics = Metrics { hits: 1, cached: 1, bytes: 1000 };
         let stat = Stat::new();
 
         for _ in 0..10 {
             stat.insert(key.clone(), metrics).await.unwrap();
         }
         let mut res = stat.get(&key).await;
-        assert_eq!(res, Metrics { hits: 10, bytes: 10000 });
+        assert_eq!(res, Metrics { hits: 10, cached: 10, bytes: 10000 });
 
         // test metrics for server
         key.object = None;
         key.model = None;
         res = stat.get(&key).await;
-        assert_eq!(res, Metrics { hits: 10, bytes: 10000 });
+        assert_eq!(res, Metrics { hits: 10, cached: 10, bytes: 10000 });
     }
 }

@@ -13,7 +13,6 @@ tokio = { version = "1", features = ["full"] }
 rocket = { version = "0.5.0-rc.1", features = ["json"] }
 rocket-cache-response = "0.6"
 serde = { version = "1", features = ["derive"] }
-moka = { version = "0.7", features = ["future"] }
-chunked-bytes = "0.3.0"
+moka = { version = "0.8", features = ["future", "dash"] }
 reqwest = "0.11"
 log     = "^0"

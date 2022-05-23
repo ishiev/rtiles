@@ -42,7 +42,7 @@ impl<'r> FromRequest<'r> for SessionId<'r> {
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         // get typed config from rocket managed state
         let config = req.rocket()
-            .state::<Arc<Config<'_>>>()
+            .state::<Config<'_>>()
             .unwrap();
         
         // get session id cookie from request
@@ -124,7 +124,7 @@ impl ModelAccess {
         let key  = Arc::new(key);
         let key2 = Arc::clone(&key);
         let mode = self.cache
-            .get_or_insert_with(key, async { self.check_remote(&key2).await })
+            .get_with(key, async { self.check_remote(&key2).await })
             .await;
         debug!("access {:?} for {:?}", mode, &key2);
         mode
@@ -132,12 +132,16 @@ impl ModelAccess {
 
     async fn check_remote(&self, key: &AccessKey) -> AccessMode {
         // url for request
-        let url = format!("{}/{}/{}",
-            self.config.server, 
-            match key.object { Some(ref x) => x.as_ref(), None => "" }, 
-            match key.model  { Some(ref x) => x.as_ref(), None => "" }
-        );
-        
+        let mut url = self.config.server.to_string();
+
+        if let Some(ref x) = key.object {
+            url.push_str(format!("/{}", x).as_ref());
+
+            if let Some(ref x) = key.model {
+                url.push_str(format!("/{}", x).as_ref());
+            }
+        }
+
         // prepare request to remote server
         debug!("request to remote server: {}", &url);
         let mut rq = self.client.get(&url);
