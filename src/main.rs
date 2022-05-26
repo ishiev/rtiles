@@ -57,7 +57,7 @@ async fn tileset(
             match CachedNamedFile::open_with_cache(&file, cache).await {
                 Ok(res) => {
                     // prepare and insert stat
-                    let bytes = res.len().await.unwrap_or(0);
+                    let bytes = res.len();
                     let cached = res.is_cached() as u64;
                     let key = StatKey::new(Some(object), Some(model));
                     let metrics = Metrics { hits: 1, cached, bytes };
