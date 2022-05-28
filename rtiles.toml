@@ -2,7 +2,7 @@
 address = "127.0.0.1"
 port = 8000
 base_path = "/3d"
-log_level = "debug"
+log_level = "normal"
 
 [default.access]
 server = "https://httpbin.org/anything"

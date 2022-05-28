@@ -1483,7 +1483,6 @@ name = "rtiles"
 version = "0.2.1"
 dependencies = [
  "bytes",
- "log",
  "moka",
  "reqwest",
  "rocket",

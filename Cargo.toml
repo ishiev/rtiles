@@ -15,4 +15,6 @@ rocket-cache-response = "0.6"
 serde = { version = "1", features = ["derive"] }
 moka = { version = "0.8", features = ["future", "dash"] }
 reqwest = "0.11"
-log     = "^0"
+
+[profile.release]
+strip = true  # Automatically strip symbols from the binary.
