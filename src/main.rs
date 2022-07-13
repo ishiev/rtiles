@@ -135,6 +135,11 @@ async fn stat_model(
     }
 }
 
+#[get("/ping")]
+async fn ping() -> &'static str {
+    "pong"
+}
+
 
 #[launch]
 fn rocket() -> _ {
@@ -175,6 +180,6 @@ fn rocket() -> _ {
         .manage(stat)
         .mount(
             base_path, 
-            routes![tileset, stat_all, stat_object, stat_model]
+            routes![tileset, stat_all, stat_object, stat_model, ping]
         )
 }
