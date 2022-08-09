@@ -6,16 +6,10 @@ use tokio::sync::{mpsc, RwLock};
 use serde::Serialize;
 
 /// Statistic key
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Hash, PartialEq, Eq)]
 pub struct StatKey {
     pub object: Option<String>,   // None means aggregates for all models of all objects
     pub model: Option<String>,    // None means aggregates for all models of a given object
-}
-
-impl Default for StatKey {
-    fn default() -> Self {
-        StatKey { object: None, model: None }
-    }   
 }
 
 impl StatKey {
@@ -25,17 +19,11 @@ impl StatKey {
 }
 
 /// Statistic metrics
-#[derive(Debug, Copy, Clone, PartialEq, Serialize)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Serialize)]
 pub struct Metrics {
     pub hits: u64,                // request count
     pub cached: u64,              // cached request count
     pub bytes: u64                // request bytes     
-}
-
-impl Default for Metrics {
-    fn default() -> Self {
-        Metrics {hits: 0, cached: 0, bytes: 0}
-    }
 }
 
 impl AddAssign for Metrics {
@@ -81,7 +69,7 @@ impl StatTable {
                 model: None
             };
             // update aggregates for all models of a given object
-            let metrics = map.entry(key).or_insert(Metrics::default());
+            let metrics = map.entry(key).or_insert_with(Metrics::default);
             *metrics += rec.metrics;
         }
         else {
@@ -95,12 +83,12 @@ impl StatTable {
                 model: None
             };
             // update aggregates for all models of all objects
-            let metrics = map.entry(key).or_insert(Metrics::default());
+            let metrics = map.entry(key).or_insert_with(Metrics::default);
             *metrics += rec.metrics;
         }
 
         // finally update metrics for the given object and model 
-        let metrics = map.entry(rec.key).or_insert(Metrics::default());
+        let metrics = map.entry(rec.key).or_insert_with(Metrics::default);
         *metrics += rec.metrics;
     }
 

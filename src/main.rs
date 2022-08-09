@@ -24,7 +24,7 @@ use model_cache::{FileCacheConfig, FileCache, CachedNamedFile};
 mod stat;
 use stat::{Metrics, StatKey, Stat};
 
-
+#[allow(clippy::too_many_arguments)]  // TODO: May be fefactor later?
 #[get("/models/<object>/<model>/<path..>")]
 async fn tileset(
     object: &str,

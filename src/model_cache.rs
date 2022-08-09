@@ -38,7 +38,7 @@ impl Default for FileCacheConfig {
 
 pub enum CachedNamedFile {
     File(NamedFile, u64),
-    Cached(Content)
+    Cached(Box<Content>)
 }
 
 impl CachedNamedFile {
@@ -55,7 +55,7 @@ impl CachedNamedFile {
     -> io::Result<Self> {
         // try to get content from cache
         if let Some(cnt) = cache.get(path) {
-            Ok(CachedNamedFile::Cached(cnt))
+            Ok(CachedNamedFile::Cached(Box::new(cnt)))
         } else {
             // try to open a file from a given path
             let f = Self::open(path).await?;
@@ -203,7 +203,7 @@ impl FileCache {
         task::spawn(async move {
             while let Some(path) = rx.recv().await {
                 // check cache for the path
-                if let Some(_) = cache_rx.get(&path) {
+                if cache_rx.get(&path).is_some() {
                     // already in cache, skip
                     continue;
                 }
@@ -224,10 +224,10 @@ impl FileCache {
     }
 
     /// Schedule file save to cache
-    pub fn insert(&self, path: &PathBuf) 
+    pub fn insert(&self, path: &Path) 
         -> Result<(), mpsc::error::TrySendError<PathBuf>> {
         // fails if no capacity in the channel
-        self.tx.try_send(path.clone())
+        self.tx.try_send(path.to_path_buf())
     }
 
     /// Get cached content

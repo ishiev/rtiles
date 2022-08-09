@@ -174,8 +174,10 @@ mod test {
     use super::*;
 
     fn get_model_access(server: &'static str) -> ModelAccess {
-        let mut config = AccessConfig::default();
-        config.server = Absolute::parse(server).unwrap();
+        let config = AccessConfig {
+            server: Absolute::parse(server).unwrap(),
+            ..Default::default()
+        };
         ModelAccess::new(&config).unwrap()
     }
 
