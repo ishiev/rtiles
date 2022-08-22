@@ -6,14 +6,10 @@ log_level = "normal"
 
 [default.access]
 server = "https://httpbin.org/anything"
-cache_ttl = 1800
-cache_tti = 300
+cache_ttl = 1800         # 30 min
+cache_tti = 300          # 5 мин
 
 [default.storage]
 root = "data"
-max_age = 1800
-
-[default.cache]
-size = 50           # 50 MB
-cache_ttl = 86400   # 24 hours
-cache_tti = 14400   # 4 hours
+max_age = 1800            # 30 min
+cache_size = 500          # 500 MB

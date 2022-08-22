@@ -1,93 +1,103 @@
 use bytes::Bytes;
-// use dash cache variant to prevent using GC for eviction 
+// use dash cache variant to prevent using GC for eviction
 use moka::dash::Cache;
 
 use rocket::fs::NamedFile;
-use rocket::http::ContentType;
+use rocket::http::{ContentType, Header};
 use rocket::request::Request;
 use rocket::response::{self, Responder, Response};
 use rocket::serde::{Deserialize, Serialize};
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use tokio::fs::File;
 use tokio::io::{self, AsyncReadExt};
 use tokio::sync::mpsc;
 use tokio::task;
 
+use crate::Meta;
+
 /// File cache configuration
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct FileCacheConfig {
-    pub size: u64,      // cache size limit in Mbytes
-    pub cache_ttl: u64, // cache entry Time To Live
-    pub cache_tti: u64, // cache entry Time To Idle (from last request)
+    pub size: u64, // cache size limit in Mbytes
 }
 
 impl Default for FileCacheConfig {
     fn default() -> Self {
         FileCacheConfig {
-            size: 50,               // 50 MB
-            cache_ttl: 24 * 3600,   // 24 hours
-            cache_tti: 4 * 3600,    // 4 hours
+            size: 500,             // 500 MB
         }
     }
 }
 
-
 pub enum CachedNamedFile {
-    File(NamedFile, u64),
-    Cached(Box<Content>)
+    File(NamedFile, Meta),
+    Cached(Box<Content>),
 }
 
 impl CachedNamedFile {
     /// Open file and get content size
-    pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+    pub async fn open<P: AsRef<Path>>(path: P, meta: Option<&Meta>) -> io::Result<Self> {
         let f = NamedFile::open(path).await?;
-        let l = f.metadata().await?.len();
+        let m = match meta {
+            Some(meta) => meta.clone(),
+            None => Meta::from(f.metadata().await?),
+        };
 
-        Ok(CachedNamedFile::File(f, l))
+        Ok(CachedNamedFile::File(f, m))
     }
 
     /// Get back cached content or open named file
-    pub async fn open_with_cache(path: &PathBuf, cache: &FileCache) 
-    -> io::Result<Self> {
+    pub async fn open_with_cache(
+        path: &PathBuf,
+        meta: &Meta,
+        cache: &FileCache,
+    ) -> io::Result<Self> {
         // try to get content from cache
         if let Some(cnt) = cache.get(path) {
-            Ok(CachedNamedFile::Cached(Box::new(cnt)))
-        } else {
-            // try to open a file from a given path
-            let f = Self::open(path).await?;
-
-            // check file length against cache size and u32::MAX (cache weigher limit )
-            let len = f.len();
-            if len <= cache.size() && len <= u32::MAX as u64 {
-                cache.insert(path).unwrap_or_else(
-                    |err| error!("error adding file to cache: {}", err)
-                )
+            // compare metadata
+            if &cnt.meta == meta {
+                return Ok(CachedNamedFile::Cached(Box::new(cnt)));
             } else {
-                warn!(
-                    "file {} exceeds cache size or 4GB limit, not cached",
-                    path.to_string_lossy()
-                )
-            } 
-            Ok(f)
+                // invalidate cache entry if metadata differ
+                cache.invalidate(path)
+            }
         }
+
+        // try to open a file from a given path
+        let f = Self::open(path, Some(meta)).await?;
+
+        // check file length against cache size and u32::MAX (cache weigher limit )
+        let len = f.meta().len();
+        if len <= cache.size() && len <= u32::MAX as u64 {
+            // insert file into cache
+            cache
+                .insert(path)
+                .unwrap_or_else(|err| error!("error adding file to cache: {}", err))
+        } else {
+            warn!(
+                "file {} exceeds cache size or 4GB limit, not cached",
+                path.to_string_lossy()
+            )
+        }
+        Ok(f)
     }
 
-    /// Get content lenght
-    pub fn len(&self) -> u64 {
+    /// Get content metadata
+    pub fn meta(&self) -> &Meta {
         match self {
-            CachedNamedFile::File(_, l) => *l,
-            CachedNamedFile::Cached(c) => c.length
+            CachedNamedFile::File(_, m) => m,
+            CachedNamedFile::Cached(c) => &c.meta,
         }
     }
 
+    // Does the content come from the memory cache?
     pub fn is_cached(&self) -> bool {
         match self {
             CachedNamedFile::File(..) => false,
-            CachedNamedFile::Cached(_) => true
+            CachedNamedFile::Cached(_) => true,
         }
     }
 }
@@ -105,17 +115,16 @@ impl<'r> Responder<'r, 'static> for CachedNamedFile {
                 let mut response = f.take_file().respond_to(req)?;
                 response.set_header(mime_type.unwrap_or(ContentType::Binary));
                 Ok(response)
-            },
-            CachedNamedFile::Cached(c) => c.respond_to(req)
+            }
+            CachedNamedFile::Cached(c) => c.respond_to(req),
         }
     }
 }
 
-
 /// Saved content
 #[derive(Clone)]
 pub struct Content {
-    length: u64,                    // size in bytes
+    meta: Meta,                     // file metadata
     mime_type: Option<ContentType>, // content mime type
     body: Bytes,                    // body in-memory buffer
 }
@@ -126,8 +135,8 @@ impl Content {
         // open file for reading
         let mut f = File::open(&path).await?;
 
-        // get content length
-        let length = f.metadata().await?.len();
+        // get content metadata
+        let meta = Meta::from(f.metadata().await?);
 
         // parse content type from file extension if the extension is
         // recognized. See [`ContentType::from_extension()`] for more information.
@@ -135,15 +144,15 @@ impl Content {
             Some(ext) => ContentType::from_extension(&ext.to_string_lossy()),
             None => None,
         };
-        
+
         // read the whole file to
-        let mut buf = Vec::with_capacity(length as usize);
+        let mut buf = Vec::with_capacity(meta.len() as usize);
         let bytes = f.read_to_end(&mut buf).await?;
 
-        assert_eq!(bytes as u64, length);
+        assert_eq!(bytes as u64, meta.len());
 
         Ok(Content {
-            length,
+            meta,
             mime_type,
             body: Bytes::from(buf),
         })
@@ -155,7 +164,8 @@ impl<'r> Responder<'r, 'static> for Content {
     fn respond_to(self, _: &'r Request<'_>) -> response::Result<'static> {
         Response::build()
             .header(self.mime_type.unwrap_or(ContentType::Binary))
-            .sized_body(Some(self.length as usize), Cursor::new(self.body))
+            .header(Header::new("Cache-Status", "rtiles; hit"))
+            .sized_body(Some(self.meta.len() as usize), Cursor::new(self.body))
             .ok()
     }
 }
@@ -164,42 +174,38 @@ impl<'r> Responder<'r, 'static> for Content {
 pub struct FileCache {
     cache: Cache<PathBuf, Content>,
     tx: mpsc::Sender<PathBuf>,
-    size: u64
+    size: u64,
 }
 
 impl FileCache {
-    pub fn new(config: &FileCacheConfig) -> Self {
+    pub fn new(config: FileCacheConfig) -> Self {
         // cache size in bytes
         let size = config.size * 1024 * 1024;
         // build cache
         let cache = Cache::builder()
             // closure to calculate item size
             .weigher(|key: &PathBuf, value: &Content| -> u32 {
-                if value.length > u32::MAX as u64 {
+                if value.meta.len() > u32::MAX as u64 {
                     error!(
-                        "file size for caching exceeds 4G! file: {}, size: {}", 
+                        "file size for caching exceeds 4G! file: {}, size: {}",
                         key.to_string_lossy(),
-                        value.length
+                        value.meta.len()
                     );
                     u32::MAX
                 } else {
-                    value.length as u32
+                    value.meta.len() as u32
                 }
             })
-            // Max cache size
+            // max cache size
             .max_capacity(size)
-            // Max TTL for items
-            .time_to_live(Duration::from_secs(config.cache_ttl))
-            // Max TTI for items - 5 min
-            .time_to_idle(Duration::from_secs(config.cache_tti))
             .build();
 
         // share same cache with the detached task (this is cheap operation)
         let cache_rx = cache.clone();
         let (tx, mut rx) = mpsc::channel(500);
-        
-        // spawn a detached async task 
-        // task ended when the channel has been closed 
+
+        // spawn a detached async task
+        // task ended when the channel has been closed
         task::spawn(async move {
             while let Some(path) = rx.recv().await {
                 // check cache for the path
@@ -209,9 +215,7 @@ impl FileCache {
                 }
                 // load content and insert to cache
                 match Content::from_file(&path).await {
-                    Ok(cnt) => {
-                        cache_rx.insert(path, cnt)
-                    },
+                    Ok(cnt) => cache_rx.insert(path, cnt),
                     Err(err) => {
                         error!("cache file loading error: {}", err)
                     }
@@ -224,8 +228,7 @@ impl FileCache {
     }
 
     /// Schedule file save to cache
-    pub fn insert(&self, path: &Path) 
-        -> Result<(), mpsc::error::TrySendError<PathBuf>> {
+    pub fn insert(&self, path: &Path) -> Result<(), mpsc::error::TrySendError<PathBuf>> {
         // fails if no capacity in the channel
         self.tx.try_send(path.to_path_buf())
     }
@@ -235,12 +238,16 @@ impl FileCache {
         self.cache.get(path)
     }
 
+    /// Invalidate file in ca
+    pub fn invalidate(&self, path: &PathBuf) {
+        self.cache.invalidate(path)
+    }
+
     /// Cache size in bytes
     pub fn size(&self) -> u64 {
         self.size
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -248,6 +255,7 @@ mod test {
     use bytes::Buf;
     use std::fs::File;
     use std::io::Read;
+    use std::time::Duration;
     use tokio::time::sleep;
 
     #[tokio::test]
@@ -255,11 +263,7 @@ mod test {
         let path = "README.md";
 
         let cnt = Content::from_file(path).await.unwrap();
-        println!(
-            "{} bytes read, type: {:?}",
-            cnt.length,
-            cnt.mime_type,
-        );
+        println!("{} bytes read, type: {:?}", cnt.meta.len(), cnt.mime_type,);
 
         let mut r = cnt.body.reader();
         let mut dst1 = Vec::new();
@@ -276,7 +280,7 @@ mod test {
     async fn file_cache() {
         let path = PathBuf::from("README.md");
 
-        let cache = FileCache::new(&FileCacheConfig::default());
+        let cache = FileCache::new(FileCacheConfig::default());
         cache.insert(&path).unwrap();
         // ...starting async file reading...
         // delay before get back content
@@ -297,29 +301,53 @@ mod test {
     #[tokio::test]
     async fn cached_named_file() {
         let path = PathBuf::from("README.md");
-        let cache = FileCache::new(&FileCacheConfig::default());
-        let mut buf = (Vec::new(), Vec::new());
-        
-        match CachedNamedFile::open_with_cache(&path, &cache).await.unwrap() {
-            CachedNamedFile::File(mut f, _) => f
-                .read_to_end(&mut buf.0)
-                .await
-                .unwrap(),
-            CachedNamedFile::Cached(_) => panic!("named file expected!")
+        let meta = Meta::from_path(&path).await.unwrap();
+        let cache = FileCache::new(FileCacheConfig::default());
+        let mut buf = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+
+        // get from file
+        match CachedNamedFile::open_with_cache(&path, &meta, &cache)
+            .await
+            .unwrap()
+        {
+            CachedNamedFile::File(mut f, _) => f.read_to_end(&mut buf.0).await.unwrap(),
+            CachedNamedFile::Cached(_) => panic!("named file expected!"),
         };
 
-        // delay before get from cache
+        // delay and get from cache
         sleep(Duration::from_millis(100)).await;
-
-        match CachedNamedFile::open_with_cache(&path, &cache).await.unwrap() {
+        match CachedNamedFile::open_with_cache(&path, &meta, &cache)
+            .await
+            .unwrap()
+        {
             CachedNamedFile::File(..) => panic!("cached expected!"),
-            CachedNamedFile::Cached(c) => c.body
-                .reader()
-                .read_to_end(&mut buf.1)
-                .unwrap()
+            CachedNamedFile::Cached(c) => c.body.reader().read_to_end(&mut buf.1).unwrap(),
         };
 
         assert_ne!(buf.0.len(), 0);
         assert_eq!(buf.0, buf.1);
+
+        // change metadata and get from file, now we invalidate the cache
+        let meta2 = Meta::from_path(&PathBuf::from("LICENSE")).await.unwrap();
+        match CachedNamedFile::open_with_cache(&path, &meta2, &cache)
+            .await
+            .unwrap()
+        {
+            CachedNamedFile::File(mut f, _) => f.read_to_end(&mut buf.2).await.unwrap(),
+            CachedNamedFile::Cached(_) => panic!("named file expected!"),
+        };
+
+        // delay and get again from cache
+        sleep(Duration::from_millis(100)).await;
+        match CachedNamedFile::open_with_cache(&path, &meta, &cache)
+            .await
+            .unwrap()
+        {
+            CachedNamedFile::File(..) => panic!("cached expected!"),
+            CachedNamedFile::Cached(c) => c.body.reader().read_to_end(&mut buf.3).unwrap(),
+        };
+
+        assert_ne!(buf.2.len(), 0);
+        assert_eq!(buf.2, buf.3);
     }
 }

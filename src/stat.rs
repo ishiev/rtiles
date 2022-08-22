@@ -5,18 +5,22 @@ use tokio::task;
 use tokio::sync::{mpsc, RwLock};
 use serde::Serialize;
 
+use crate::Model;
+
 /// Statistic key
 #[derive(Default, Debug, Clone, Hash, PartialEq, Eq)]
 pub struct StatKey {
-    pub object: Option<String>,   // None means aggregates for all models of all objects
-    pub model: Option<String>,    // None means aggregates for all models of a given object
+    pub model: Arc<Model>
 }
 
 impl StatKey {
-    pub fn new(object: Option<&str>, model: Option<&str>) -> Self {
-        StatKey { object: object.map(str::to_owned), model: model.map(str::to_owned) }
+    pub fn new(object: Option<&str>, name: Option<&str>) -> Self {
+        StatKey { 
+            model: Arc::new(Model::new(object, name))
+        }
     }
 }
+
 
 /// Statistic metrics
 #[derive(Default, Debug, Copy, Clone, PartialEq, Serialize)]
@@ -54,34 +58,32 @@ impl StatTable {
     }
 
     /// Insert new metrics, calculate aggregates
-    async fn insert(&self, mut rec: Record) {
+    async fn insert(&self, rec: Record) {
         // lock map for update
         let mut map = self.0.write().await;
 
-        if rec.key.model.is_some() {
-            if rec.key.object.is_none() {
+        if rec.key.model.name.is_some() {
+            if rec.key.model.object.is_none() {
                 // illegal model key
                 error!("illegal model key for stat insert: {:?}, ignored", &rec.key);
                 return;
             }
-            let key = StatKey{ 
-                object: rec.key.object.clone(),
-                model: None
-            };
+            let key = StatKey::new(
+                rec.key.model.object.as_deref(), 
+                None
+            );
             // update aggregates for all models of a given object
             let metrics = map.entry(key).or_insert_with(Metrics::default);
             *metrics += rec.metrics;
         }
         else {
             // if model was set to None, also set object to None
-            rec.key.object.take();
+            // NOTE: mutate Arc'ed model shared reference
+            //cargorec.key.model.object.take();
         }
 
-        if rec.key.object.is_some() {
-            let key = StatKey{ 
-                object: None,
-                model: None
-            };
+        if rec.key.model.object.is_some() {
+            let key = StatKey::new(None, None);
             // update aggregates for all models of all objects
             let metrics = map.entry(key).or_insert_with(Metrics::default);
             *metrics += rec.metrics;
@@ -150,66 +152,64 @@ mod test {
 
     #[tokio::test]
     async fn stat_table() {
-        let mut key = StatKey::default();
         let metrics = Metrics { hits: 1, cached: 1,  bytes: 1000 };
         let stat = StatTable::new();
+        let mut key;
 
         // test first model metrics 
-        key.object = Some("lake".to_owned());
-        key.model  = Some("first".to_owned());
+        key = StatKey::new(Some("lake"), Some("first"));
         stat.insert(Record { key: key.clone(), metrics }).await;
         stat.insert(Record { key: key.clone(), metrics }).await;
         let mut res = stat.get(&key).await;
         assert_eq!(res, Metrics { hits: 2, cached: 2, bytes: 2000 });
 
         // test second model metrics
-        key.model = Some("second".to_owned());
+        key = StatKey::new(Some("lake"), Some("second"));
         stat.insert(Record { key: key.clone(), metrics }).await;
         res = stat.get(&key).await;
         assert_eq!(res, Metrics { hits: 1, cached: 1, bytes: 1000 });
 
         // test metrics for whole object
-        key.model = None;
+        key = StatKey::new(Some("lake"), None);
         res = stat.get(&key).await;
         assert_eq!(res, Metrics { hits: 3, cached: 3, bytes: 3000 });
 
         // test another object metrics 
-        key.object = Some("land".to_owned());
-        key.model  = Some("first".to_owned());
+        key = StatKey::new(Some("land"), Some("first"));
         stat.insert(Record { key: key.clone(), metrics }).await;
         stat.insert(Record { key: key.clone(), metrics }).await;
         res = stat.get(&key).await;
         assert_eq!(res, Metrics { hits: 2, cached: 2, bytes: 2000 });
 
         // test metrics for another whole object
-        key.model = None;
+        key = StatKey::new(Some("land"), None);
         res = stat.get(&key).await;
         assert_eq!(res, Metrics { hits: 2, cached: 2, bytes: 2000 });
 
         // test metrics for server
-        key.object = None;
+        key = StatKey::default();
         res = stat.get(&key).await;
         assert_eq!(res, Metrics { hits: 5, cached: 5, bytes: 5000 });
 
         // test illegal object and model key metrics 
-        key.model  = Some("first".to_owned());
+        key = StatKey::new(None, Some("first"));
         stat.insert(Record { key: key.clone(), metrics }).await;
         stat.insert(Record { key: key.clone(), metrics }).await;
         res = stat.get(&key).await;
         assert_eq!(res, Metrics { hits: 0, cached: 0, bytes: 0 });
 
         // again test metrics for server 
-        key.model = None;
+        key = StatKey::default();
         res = stat.get(&key).await;
         assert_eq!(res, Metrics { hits: 5, cached: 5, bytes: 5000 });
     }
 
     #[tokio::test]
     async fn stat_server() {
-        let mut key = StatKey {
-            object: Some("city".to_owned()),
-            model: Some("block".to_owned())
-        };
+        let mut key = StatKey::new (
+            Some("city"),
+            Some("block")
+        );
         let metrics = Metrics { hits: 1, cached: 1, bytes: 1000 };
         let stat = Stat::new();
 
@@ -220,8 +220,7 @@ mod test {
         assert_eq!(res, Metrics { hits: 10, cached: 10, bytes: 10000 });
 
         // test metrics for server
-        key.object = None;
-        key.model = None;
+        key = StatKey::default();
         res = stat.get(&key).await;
         assert_eq!(res, Metrics { hits: 10, cached: 10, bytes: 10000 });
     }
